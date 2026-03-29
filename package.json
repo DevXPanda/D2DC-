@@ -4,11 +4,9 @@
   "private": true,
   "scripts": {
     "dev": "next dev",
-    "build": "next build",
+    "build": "npx convex codegen && next build",
     "start": "next start",
-    "lint": "next lint",
-    "convex:dev": "convex dev",
-    "convex:deploy": "convex deploy"
+    "lint": "next lint"
   },
   "dependencies": {
     "convex": "^1.17.4",
