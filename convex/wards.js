@@ -15,11 +15,13 @@ export const list = query({
       ctx.db.query("properties").collect(),
       ctx.db.query("users").collect()
     ]);
+    const userMap = new Map(users.map((item) => [item._id, item]));
 
     return wards
       .map((ward) => ({
         ...ward,
         id: ward._id,
+        collectorName: ward.collectorId ? userMap.get(ward.collectorId)?.name || null : null,
         propertyCount: properties.filter((property) => property.ward === ward._id).length,
         userCount: users.filter((user) => user.assignedWard === ward._id).length
       }))
@@ -35,7 +37,9 @@ export const create = mutation({
     token: v.string(),
     wardNumber: v.string(),
     wardName: v.string(),
-    description: v.optional(v.string())
+    description: v.optional(v.string()),
+    collectorId: v.optional(v.id("users")),
+    isActive: v.boolean()
   },
   handler: async (ctx, args) => {
     const { user } = await requireRole(ctx, args.token, ["admin"]);
@@ -43,7 +47,8 @@ export const create = mutation({
       wardNumber: args.wardNumber.trim(),
       wardName: args.wardName.trim(),
       description: args.description?.trim(),
-      isActive: true,
+      collectorId: args.collectorId,
+      isActive: args.isActive,
       createdAt: Date.now()
     });
 
@@ -64,7 +69,9 @@ export const update = mutation({
     wardId: v.id("wards"),
     wardNumber: v.string(),
     wardName: v.string(),
-    description: v.optional(v.string())
+    description: v.optional(v.string()),
+    collectorId: v.optional(v.id("users")),
+    isActive: v.boolean()
   },
   handler: async (ctx, args) => {
     const { user } = await requireRole(ctx, args.token, ["admin"]);
@@ -76,7 +83,9 @@ export const update = mutation({
     await ctx.db.patch(args.wardId, {
       wardNumber: args.wardNumber.trim(),
       wardName: args.wardName.trim(),
-      description: args.description?.trim()
+      description: args.description?.trim(),
+      collectorId: args.collectorId,
+      isActive: args.isActive
     });
 
     await createAuditLog(ctx, {

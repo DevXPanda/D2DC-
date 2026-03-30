@@ -41,7 +41,7 @@ async function ensureCitizenForProperty(ctx, { ownerName, mobile }) {
   return citizenId;
 }
 
-export const list = query({
+export const listProperties = query({
   args: {
     token: v.string(),
     search: v.optional(v.string())
@@ -110,6 +110,17 @@ export const lookupCitizenByPhone = query({
   }
 });
 
+export const generateUploadUrl = mutation(async (ctx) => {
+  return await ctx.storage.generateUploadUrl();
+});
+
+export const getImageUrl = query({
+  args: { storageId: v.id("_storage") },
+  handler: async (ctx, args) => {
+    return await ctx.storage.getUrl(args.storageId);
+  }
+});
+
 export const create = mutation({
   args: {
     token: v.string(),
@@ -117,7 +128,24 @@ export const create = mutation({
     mobile: v.string(),
     address: v.string(),
     ward: v.id("wards"),
-    status: v.union(v.literal("active"), v.literal("inactive"))
+    status: v.union(v.literal("active"), v.literal("inactive")),
+    propertyNumber: v.optional(v.string()),
+    ownerPhotoId: v.optional(v.string()),
+    propertyType: v.optional(v.string()),
+    usageType: v.optional(v.string()),
+    constructionType: v.optional(v.string()),
+    numberOfFloors: v.optional(v.number()),
+    constructionYear: v.optional(v.number()),
+    occupancyStatus: v.optional(v.string()),
+    city: v.optional(v.string()),
+    state: v.optional(v.string()),
+    pincode: v.optional(v.string()),
+    totalArea: v.optional(v.number()),
+    builtUpArea: v.optional(v.number()),
+    latitude: v.optional(v.string()),
+    longitude: v.optional(v.string()),
+    propertyPhotoIds: v.optional(v.array(v.string())),
+    remarks: v.optional(v.string())
   },
   handler: async (ctx, args) => {
     const { user } = await requireRole(ctx, args.token, ["admin"]);
@@ -136,6 +164,7 @@ export const create = mutation({
       .collect();
 
     const propertyId = `D2DC-${ward.wardNumber}-${String(existing.length + 1).padStart(4, "0")}`;
+    const now = Date.now();
     const propertyDocId = await ctx.db.insert("properties", {
       propertyId,
       ownerName: args.ownerName.trim(),
@@ -144,14 +173,54 @@ export const create = mutation({
       ward: args.ward,
       citizenId,
       status: args.status,
-      createdAt: Date.now()
+      propertyNumber: args.propertyNumber,
+      ownerPhotoId: args.ownerPhotoId,
+      propertyType: args.propertyType,
+      usageType: args.usageType,
+      constructionType: args.constructionType,
+      numberOfFloors: args.numberOfFloors,
+      constructionYear: args.constructionYear,
+      occupancyStatus: args.occupancyStatus,
+      city: args.city,
+      state: args.state,
+      pincode: args.pincode,
+      totalArea: args.totalArea,
+      builtUpArea: args.builtUpArea,
+      latitude: args.latitude,
+      longitude: args.longitude,
+      propertyPhotoIds: args.propertyPhotoIds,
+      remarks: args.remarks,
+      lastPaidDate: now,
+      createdAt: now
+    });
+
+    // Create Assessment
+    await ctx.db.insert("assessments", {
+      propertyId: propertyDocId,
+      monthlyCharge: 100,
+      startDate: now,
+      status: "active",
+      createdAt: now,
+      createdBy: user._id,
+      autoBilling: true
+    });
+
+    // Initial Demand
+    await ctx.db.insert("demands", {
+      propertyId: propertyDocId,
+      totalAmount: 0,
+      pendingMonths: 0,
+      baseAmount: 0,
+      penaltyAmount: 0,
+      generatedBy: "system",
+      lastUpdated: now
     });
 
     await createAuditLog(ctx, {
       action: "Property created",
       performedBy: user.name,
       entityType: "property",
-      details: `${propertyId} created for ${args.ownerName} and linked to citizen`
+      details: `${propertyId} created with assessment and demand`
     });
 
     return propertyDocId;
@@ -166,7 +235,24 @@ export const update = mutation({
     mobile: v.string(),
     address: v.string(),
     ward: v.id("wards"),
-    status: v.union(v.literal("active"), v.literal("inactive"))
+    status: v.union(v.literal("active"), v.literal("inactive")),
+    propertyNumber: v.optional(v.string()),
+    ownerPhotoId: v.optional(v.string()),
+    propertyType: v.optional(v.string()),
+    usageType: v.optional(v.string()),
+    constructionType: v.optional(v.string()),
+    numberOfFloors: v.optional(v.number()),
+    constructionYear: v.optional(v.number()),
+    occupancyStatus: v.optional(v.string()),
+    city: v.optional(v.string()),
+    state: v.optional(v.string()),
+    pincode: v.optional(v.string()),
+    totalArea: v.optional(v.number()),
+    builtUpArea: v.optional(v.number()),
+    latitude: v.optional(v.string()),
+    longitude: v.optional(v.string()),
+    propertyPhotoIds: v.optional(v.array(v.string())),
+    remarks: v.optional(v.string())
   },
   handler: async (ctx, args) => {
     const { user } = await requireRole(ctx, args.token, ["admin"]);
@@ -185,7 +271,24 @@ export const update = mutation({
       address: args.address.trim(),
       ward: args.ward,
       citizenId,
-      status: args.status
+      status: args.status,
+      propertyNumber: args.propertyNumber,
+      ownerPhotoId: args.ownerPhotoId,
+      propertyType: args.propertyType,
+      usageType: args.usageType,
+      constructionType: args.constructionType,
+      numberOfFloors: args.numberOfFloors,
+      constructionYear: args.constructionYear,
+      occupancyStatus: args.occupancyStatus,
+      city: args.city,
+      state: args.state,
+      pincode: args.pincode,
+      totalArea: args.totalArea,
+      builtUpArea: args.builtUpArea,
+      latitude: args.latitude,
+      longitude: args.longitude,
+      propertyPhotoIds: args.propertyPhotoIds,
+      remarks: args.remarks
     });
 
     await createAuditLog(ctx, {

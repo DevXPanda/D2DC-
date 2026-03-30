@@ -11,7 +11,8 @@ import { clearSession, getSession } from "@/lib/session-store";
 const segmentLabelMap = {
   collector: "Collector",
   dashboard: "Dashboard",
-  history: "Visit History"
+  history: "Visit History",
+  collections: "Collections"
 };
 
 function getBreadcrumbs(pathname) {
@@ -135,6 +136,9 @@ export default function CollectorShell({ children }) {
             </Link>
             <Link href="/collector/history" className={`btn ${pathname === "/collector/history" ? "btn-primary" : "btn-secondary"}`}>
               Visit History
+            </Link>
+            <Link href="/collector/collections" className={`btn ${pathname === "/collector/collections" ? "btn-primary" : "btn-secondary"}`}>
+              Collections
             </Link>
           </div>
 

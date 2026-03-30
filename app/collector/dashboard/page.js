@@ -2,74 +2,78 @@
 
 import { useEffect, useState } from "react";
 import { useMutation, useQuery } from "convex/react";
-import { CreditCard, MapPin, ReceiptText, Search, ShieldAlert } from "lucide-react";
+import { CreditCard, MapPin, ReceiptText, Search, ShieldAlert, Camera, User, Clock, CheckCircle2, AlertCircle } from "lucide-react";
 import { api } from "@/convex/_generated/api";
 import { useStoredSession } from "@/lib/session-store";
+import { useToast } from "@/components/toast";
 
 const defaultForm = {
   amount: "",
   paymentMode: "cash",
-  penaltyAmount: "50"
+  penaltyAmount: "0",
+  citizenResponse: "will_pay_today",
+  visitType: "payment_collection",
+  transactionId: "",
+  chequeNumber: "",
+  chequeDate: "",
+  bankName: "",
+  remarks: "",
+  expectedPaymentDate: ""
 };
 
 export default function CollectorDashboardPage() {
   const session = useStoredSession();
+  const { toast } = useToast();
   const [search, setSearch] = useState("");
   const [selectedPropertyId, setSelectedPropertyId] = useState("");
-  const [visitType, setVisitType] = useState("");
   const [form, setForm] = useState(defaultForm);
   const [geoLocation, setGeoLocation] = useState("");
   const [geoStatus, setGeoStatus] = useState("Capture location when you start a visit.");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState("");
   const [result, setResult] = useState(null);
+  
   const dashboard = useQuery(api.d2dc.collectorDashboard, session?.token ? { token: session.token, search } : "skip");
   const submitCollectorVisit = useMutation(api.d2dc.submitCollectorVisit);
-  const selectedProperty = dashboard?.properties.find((property) => property.id === selectedPropertyId) || null;
+  const selectedProperty = dashboard?.properties.find((p) => p.id === selectedPropertyId) || null;
 
   useEffect(() => {
     if (!selectedPropertyId) {
-      setVisitType("");
       setForm(defaultForm);
       setGeoLocation("");
       setGeoStatus("Capture location when you start a visit.");
       setResult(null);
+    } else if (selectedProperty) {
+      setForm(prev => ({ ...prev, amount: selectedProperty.totalDue.toString() }));
     }
-  }, [selectedPropertyId]);
+  }, [selectedPropertyId, selectedProperty]);
 
   const captureLocation = () => {
     if (!navigator.geolocation) {
       setGeoStatus("Geolocation is not supported on this device.");
       return;
     }
-
     setGeoStatus("Capturing location...");
     navigator.geolocation.getCurrentPosition(
-      (position) => {
-        const coords = `${position.coords.latitude.toFixed(6)}, ${position.coords.longitude.toFixed(6)}`;
+      (pos) => {
+        const coords = `${pos.coords.latitude.toFixed(6)}, ${pos.coords.longitude.toFixed(6)}`;
         setGeoLocation(coords);
         setGeoStatus("Location captured successfully.");
       },
       () => {
-        setGeoStatus("Unable to capture location. Please allow location access.");
+        setGeoStatus("Unable to capture location. Please allow access.");
       },
       { enableHighAccuracy: true, timeout: 10000 }
     );
   };
 
   const handleSubmit = async () => {
-    if (!selectedProperty || !visitType) {
-      setError("Select a property and choose PAID or NOT PAID.");
+    if (!selectedProperty) {
+      setError("Please select a property first.");
       return;
     }
-
     if (!geoLocation) {
-      setError("Please capture geo location before submitting.");
-      return;
-    }
-
-    if (visitType === "paid" && !form.amount) {
-      setError("Enter the amount collected.");
+      setError("Geo-location is required for field visits.");
       return;
     }
 
@@ -80,267 +84,351 @@ export default function CollectorDashboardPage() {
       const response = await submitCollectorVisit({
         token: session.token,
         propertyId: selectedProperty.id,
-        visitType,
+        visitType: form.visitType,
+        citizenResponse: form.citizenResponse,
         geoLocation,
-        amount: form.amount ? Number(form.amount) : undefined,
-        paymentMode: form.paymentMode,
-        penaltyAmount: form.penaltyAmount ? Number(form.penaltyAmount) : undefined
+        amount: form.citizenResponse === "will_pay_today" ? Number(form.amount || 0) : undefined,
+        paymentMode: form.citizenResponse === "will_pay_today" ? form.paymentMode : undefined,
+        transactionId: form.transactionId || undefined,
+        chequeNumber: form.chequeNumber || undefined,
+        chequeDate: form.chequeDate ? new Date(form.chequeDate).getTime() : undefined,
+        bankName: form.bankName || undefined,
+        remarks: form.remarks || undefined,
+        expectedPaymentDate: form.expectedPaymentDate ? new Date(form.expectedPaymentDate).getTime() : undefined,
+        penaltyAmount: Number(form.penaltyAmount || 0)
       });
 
       setResult(response);
-      if (typeof window !== "undefined") {
-        window.open(response.whatsappUrl, "_blank", "noopener,noreferrer");
+      toast.success("Field visit recorded successfully.");
+      
+      if (typeof window !== "undefined" && response.whatsappUrl) {
+         // Throttled open to avoid popup blocks
+         setTimeout(() => window.open(response.whatsappUrl, "_blank"), 500);
       }
+      
       setSelectedPropertyId("");
-      setVisitType("");
-      setForm(defaultForm);
-      setGeoLocation("");
-      setGeoStatus("Capture location when you start a visit.");
-    } catch (submissionError) {
-      setError(submissionError.message || "Unable to submit the visit.");
+    } catch (err) {
+      setError(err.message || "Unable to submit visit.");
     } finally {
       setSubmitting(false);
     }
   };
 
   return (
-    <div className="space-y-6">
-      <div>
-        <h1 className="ds-page-title">Collector Dashboard</h1>
-        <p className="ds-page-subtitle">Mobile-first D2DC field workflow for property visits, payment collection, and notice-required updates.</p>
-      </div>
-
-      <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
-        <div className="stat-card">
-          <p className="text-xs font-medium uppercase text-gray-500">Assigned Properties</p>
-          <p className="mt-2 text-2xl font-bold text-gray-900">{dashboard?.stats.totalAssignedProperties ?? 0}</p>
-        </div>
-        <div className="stat-card">
-          <p className="text-xs font-medium uppercase text-gray-500">Paid Visits</p>
-          <p className="mt-2 text-2xl font-bold text-emerald-600">{dashboard?.stats.paidVisits ?? 0}</p>
-        </div>
-        <div className="stat-card">
-          <p className="text-xs font-medium uppercase text-gray-500">Not Paid Visits</p>
-          <p className="mt-2 text-2xl font-bold text-amber-600">{dashboard?.stats.notPaidVisits ?? 0}</p>
-        </div>
-        <div className="stat-card">
-          <p className="text-xs font-medium uppercase text-gray-500">Pending Admin Approval</p>
-          <p className="mt-2 text-2xl font-bold text-blue-600">{dashboard?.stats.pendingApprovals ?? 0}</p>
+    <div className="space-y-8 pb-20 animate-in fade-in duration-700">
+      <div className="ds-page-header">
+        <div className="flex flex-col gap-2">
+          <h1 className="ds-page-title inline-flex items-center text-3xl font-medium tracking-tight text-slate-900 border-l-4 border-primary-600 pl-4">
+            Collector Hub
+          </h1>
+          <p className="ds-page-subtitle text-slate-500 max-w-2xl leading-relaxed">
+            Standardised D2DC field operations: capture visits, collect multi-mode payments, and trigger escalation notices.
+          </p>
         </div>
       </div>
 
-      <div className="grid grid-cols-1 gap-6 xl:grid-cols-[1.1fr_0.9fr]">
-        <div className="space-y-6">
-          <div className="card">
-            <div className="mb-4 flex items-center gap-3">
-              <Search className="h-4 w-4 text-gray-400" />
-              <input
-                className="input"
-                placeholder="Search assigned property by ID, owner, or address..."
-                value={search}
-                onChange={(event) => setSearch(event.target.value)}
-              />
+      <div className="grid grid-cols-2 gap-6 lg:grid-cols-4">
+        {[
+          { label: "Assigned Assets", val: dashboard?.stats.totalAssignedProperties, color: "text-slate-900" },
+          { label: "Successful Collections", val: dashboard?.stats.paidVisits, color: "text-emerald-600" },
+          { label: "Unpaid Engagements", val: dashboard?.stats.notPaidVisits, color: "text-amber-600" },
+          { label: "Pending Approvals", val: dashboard?.stats.pendingApprovals, color: "text-blue-600" }
+        ].map((stat, idx) => (
+          <div key={idx} className="stat-card p-6 bg-white border border-slate-100 hover:shadow-lg transition-all">
+            <p className="text-[10px] font-medium uppercase tracking-[0.2em] text-slate-400">{stat.label}</p>
+            <p className={`mt-3 text-3xl font-medium tracking-tight ${stat.color}`}>{stat.val ?? 0}</p>
+          </div>
+        ))}
+      </div>
+
+      <div className="grid grid-cols-1 gap-8 xl:grid-cols-[1.1fr_0.9fr]">
+        <div className="space-y-8">
+          {/* Property Selection Card */}
+          <div className="bg-white rounded-3xl border border-slate-100 shadow-sm overflow-hidden">
+            <div className="p-8 border-b border-slate-50">
+               <div className="relative group">
+                  <Search className="absolute left-4 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400 group-focus-within:text-primary-500 transition-colors" />
+                  <input
+                    className="input pl-12 h-14 bg-slate-50/50 border-slate-100 focus:bg-white text-base rounded-2xl transition-all"
+                    placeholder="Search assigned property ID, owner, or address..."
+                    value={search}
+                    onChange={(e) => setSearch(e.target.value)}
+                  />
+               </div>
             </div>
 
-            {!dashboard || dashboard.properties.length === 0 ? (
-              <div className="rounded-lg border border-dashed border-gray-200 bg-gray-50 px-4 py-8 text-center text-sm text-gray-500">
-                No properties available for this collector. Admin needs to assign a ward and create properties first.
-              </div>
-            ) : (
-              <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
-                {dashboard.properties.map((property) => (
-                  <button
-                    key={property.id}
-                    type="button"
-                    onClick={() => {
-                      setSelectedPropertyId(property.id);
-                      setError("");
-                      setResult(null);
-                      captureLocation();
-                    }}
-                    className={`rounded-xl border p-5 text-left transition ${
-                      selectedPropertyId === property.id
-                        ? "border-primary-500 bg-primary-50 shadow-sm"
-                        : "border-gray-200 bg-white hover:border-primary-300 hover:bg-gray-50"
-                    }`}
-                  >
-                    <p className="text-sm font-semibold text-gray-900">{property.propertyId}</p>
-                    <p className="mt-1 text-sm text-gray-700">{property.ownerName}</p>
-                    <p className="mt-2 text-sm text-gray-500">{property.address}</p>
-                  </button>
-                ))}
-              </div>
-            )}
+            <div className="p-4 bg-slate-50/30">
+               {!dashboard || dashboard.properties.length === 0 ? (
+                 <div className="rounded-2xl border border-dashed border-slate-200 bg-white px-4 py-12 text-center text-sm text-slate-400 font-medium">
+                   No properties found in your assigned ward.
+                 </div>
+               ) : (
+                 <div className="grid grid-cols-1 gap-4 md:grid-cols-2 max-h-[400px] overflow-y-auto p-2 scrollbar-thin">
+                   {dashboard.properties.map((p) => (
+                     <button
+                       key={p.id}
+                       onClick={() => {
+                         setSelectedPropertyId(p.id);
+                         setError("");
+                         setResult(null);
+                         captureLocation();
+                       }}
+                       className={`p-5 rounded-2xl text-left border transition-all duration-300 ${
+                         selectedPropertyId === p.id
+                           ? "border-primary-500 bg-primary-50 shadow-md ring-4 ring-primary-50"
+                           : "border-slate-100 bg-white hover:border-primary-300 hover:bg-slate-50"
+                       }`}
+                     >
+                       <div className="flex justify-between items-start mb-2">
+                          <p className="text-sm font-medium text-slate-900 tracking-tight">{p.propertyId}</p>
+                          <span className="text-[9px] font-medium uppercase tracking-widest text-primary-600 bg-primary-50 px-2 py-0.5 rounded">Active</span>
+                       </div>
+                       <p className="text-xs font-medium text-slate-600 truncate">{p.ownerName}</p>
+                       <p className="mt-2 text-[10px] text-slate-400 line-clamp-1">{p.address}</p>
+                     </button>
+                   ))}
+                 </div>
+               )}
+            </div>
           </div>
 
-          <div className="card">
-            <div className="mb-4">
-              <h2 className="ds-section-title">Start Visit</h2>
-              <p className="text-sm text-gray-500">Select property, capture location, then complete the visit with one of the two field outcomes.</p>
-            </div>
-
-            {selectedProperty ? (
-              <div className="space-y-5">
-                <div className="rounded-xl border border-gray-200 bg-gray-50 p-4">
-                  <p className="text-xs uppercase text-gray-500">Property ID</p>
-                  <p className="text-lg font-bold text-gray-900">{selectedProperty.propertyId}</p>
-                  <p className="mt-3 text-xs uppercase text-gray-500">Owner Name</p>
-                  <p className="text-sm font-medium text-gray-900">{selectedProperty.ownerName}</p>
-                  <p className="mt-3 text-xs uppercase text-gray-500">Address</p>
-                  <p className="text-sm text-gray-700">{selectedProperty.address}</p>
+          {/* Workflow Card */}
+          <div className="bg-white rounded-3xl border border-slate-100 shadow-sm p-8">
+             <div className="flex items-center gap-4 mb-8">
+                <div className="bg-slate-100 p-3 rounded-2xl text-slate-600">
+                   <Clock className="h-5 w-5" />
                 </div>
+                <div>
+                   <h2 className="text-xl font-medium text-slate-900 tracking-tight">Record Field Engagement</h2>
+                   <p className="text-xs text-slate-500 mt-0.5">Capturing geolocation and citizen response for audit trails.</p>
+                </div>
+             </div>
 
-                <div className="rounded-xl border border-gray-200 p-4">
-                  <div className="mb-3 flex items-center justify-between">
-                    <div className="flex items-center gap-2 text-sm font-medium text-gray-900">
-                      <MapPin className="h-4 w-4 text-primary-600" />
-                      Geo Location
-                    </div>
-                    <button type="button" onClick={captureLocation} className="btn btn-secondary">
-                      Refresh Location
-                    </button>
+             {selectedProperty ? (
+               <div className="space-y-8">
+                  {/* Property Quick Info */}
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-6 p-6 bg-slate-50/50 rounded-2xl border border-slate-100">
+                     <div className="space-y-4">
+                        <div>
+                           <p className="text-[10px] font-medium text-slate-400 uppercase tracking-widest">Selected Asset</p>
+                           <p className="text-base font-medium text-slate-900 mt-1">{selectedProperty.propertyId}</p>
+                           <p className="text-xs text-slate-500">{selectedProperty.ownerName}</p>
+                        </div>
+                        <div>
+                           <p className="text-[10px] font-medium text-slate-400 uppercase tracking-widest">Geo Context</p>
+                           <div className="flex items-center gap-2 mt-1">
+                              <MapPin className="h-3 w-3 text-primary-600" />
+                              <span className="text-xs font-medium text-slate-700">{geoLocation || "Awaiting GPS..."}</span>
+                           </div>
+                           <p className="text-[9px] text-slate-400 mt-1">{geoStatus}</p>
+                        </div>
+                     </div>
+                     <div className="text-right flex flex-col justify-between">
+                        <div>
+                           <p className="text-[10px] font-medium text-slate-400 uppercase tracking-widest">Financial Summary</p>
+                           <p className="text-2xl font-medium text-slate-900 mt-1 tracking-tight">₹{selectedProperty.totalDue.toLocaleString("en-IN")}</p>
+                           <p className="text-[10px] font-medium text-rose-500 mt-1">{selectedProperty.pendingMonths} months in arrears</p>
+                        </div>
+                        <button onClick={captureLocation} className="text-[10px] font-medium text-primary-600 uppercase tracking-widest hover:underline">
+                           Refresh Coordinates
+                        </button>
+                     </div>
                   </div>
-                  <p className="text-sm text-gray-700">{geoLocation || "Location not captured yet."}</p>
-                  <p className="mt-2 text-xs text-gray-500">{geoStatus}</p>
-                </div>
 
-                <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-                  <button
-                    type="button"
-                    onClick={() => setVisitType("paid")}
-                    className={`rounded-2xl border px-6 py-8 text-center text-lg font-bold transition ${
-                      visitType === "paid"
-                        ? "border-emerald-500 bg-emerald-50 text-emerald-700"
-                        : "border-gray-200 bg-white text-gray-700 hover:border-emerald-300"
-                    }`}
+                  {/* Visit Logic Form */}
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                     <div className="space-y-1">
+                        <label className="text-[10px] font-medium text-slate-400 uppercase tracking-widest pl-1">Visit Category</label>
+                        <select 
+                          className="input h-14 bg-slate-50 border-slate-100 focus:bg-white transition-all font-medium text-slate-800"
+                          value={form.visitType}
+                          onChange={(e) => setForm(f => ({ ...f, visitType: e.target.value }))}
+                        >
+                           <option value="payment_collection">Payment Collection</option>
+                           <option value="reminder">Standard Reminder</option>
+                           <option value="warning">Official Warning</option>
+                           <option value="final_warning">Final Notice / Warrant</option>
+                        </select>
+                     </div>
+                     <div className="space-y-1">
+                        <label className="text-[10px] font-medium text-slate-400 uppercase tracking-widest pl-1">Citizen Response</label>
+                        <select 
+                          className="input h-14 bg-slate-50 border-slate-100 focus:bg-white transition-all font-medium text-slate-800"
+                          value={form.citizenResponse}
+                          onChange={(e) => setForm(f => ({ ...f, citizenResponse: e.target.value }))}
+                        >
+                           <option value="will_pay_today">Will pay immediately</option>
+                           <option value="will_pay_later">Promised to pay later</option>
+                           <option value="refused_to_pay">Refused payment</option>
+                           <option value="not_available">Premise locked / NA</option>
+                        </select>
+                     </div>
+                  </div>
+
+                  {/* Dynamic Sections Based on Response */}
+                  {form.citizenResponse === "will_pay_today" && (
+                    <div className="p-8 bg-emerald-50 rounded-3xl border border-emerald-100 space-y-6 animate-in slide-in-from-top-4 duration-500">
+                       <div className="flex items-center gap-3 mb-2">
+                          <CreditCard className="h-5 w-5 text-emerald-600" />
+                          <h3 className="text-sm font-medium text-emerald-900 uppercase tracking-widest">Collection Details</h3>
+                       </div>
+                       
+                       <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                          <div className="md:col-span-1 space-y-1">
+                             <label className="text-[10px] font-medium text-emerald-700 uppercase tracking-widest pl-1">Collect Amount (₹)</label>
+                             <input 
+                               className="input h-12 bg-white border-emerald-100 text-lg font-medium tabular-nums"
+                               type="number"
+                               value={form.amount}
+                               onChange={(e) => setForm(f => ({ ...f, amount: e.target.value }))}
+                             />
+                          </div>
+                          <div className="md:col-span-1 space-y-1">
+                             <label className="text-[10px] font-medium text-emerald-700 uppercase tracking-widest pl-1">Payment Mode</label>
+                             <select 
+                               className="input h-12 bg-white border-emerald-100 font-medium"
+                               value={form.paymentMode}
+                               onChange={(e) => setForm(f => ({ ...f, paymentMode: e.target.value }))}
+                             >
+                                <option value="cash">Cash Payment</option>
+                                <option value="upi">Digital UPI</option>
+                                <option value="cheque">Bank Cheque</option>
+                                <option value="dd">Demand Draft</option>
+                             </select>
+                          </div>
+                          <div className="md:col-span-1 space-y-1">
+                             <label className="text-[10px] font-medium text-emerald-700 uppercase tracking-widest pl-1">Ref / ID / Chq No.</label>
+                             <input 
+                               className="input h-12 bg-white border-emerald-100 font-medium"
+                               placeholder="Optional"
+                               value={form.paymentMode === "cheque" ? form.chequeNumber : form.transactionId}
+                               onChange={(e) => setForm(f => ({ ...f, [form.paymentMode === "cheque" ? "chequeNumber" : "transactionId"]: e.target.value }))}
+                             />
+                          </div>
+                       </div>
+                    </div>
+                  )}
+
+                  {(form.citizenResponse === "will_pay_later") && (
+                    <div className="p-6 bg-amber-50 rounded-2xl border border-amber-100 animate-in slide-in-from-top-4 duration-500">
+                       <label className="text-[10px] font-medium text-amber-700 uppercase tracking-widest mb-1 block">Expected Payment Date</label>
+                       <input 
+                         type="date"
+                         className="input h-12 bg-white border-amber-100 font-medium"
+                         value={form.expectedPaymentDate}
+                         onChange={(e) => setForm(f => ({ ...f, expectedPaymentDate: e.target.value }))}
+                       />
+                    </div>
+                  )}
+
+                  {/* Remarks & Photos */}
+                  <div className="space-y-4">
+                     <div className="space-y-1">
+                        <label className="text-[10px] font-medium text-slate-400 uppercase tracking-widest pl-1">Field Observation / Remarks</label>
+                        <textarea 
+                          className="input min-h-[100px] py-4 bg-slate-50 border-slate-100 focus:bg-white resize-none"
+                          placeholder="Describe citizen interaction, property condition, or reason for non-payment..."
+                          value={form.remarks}
+                          onChange={(e) => setForm(f => ({ ...f, remarks: e.target.value }))}
+                        />
+                     </div>
+                  </div>
+
+                  {error && (
+                    <div className="p-4 bg-rose-50 border border-rose-100 rounded-2xl flex items-center gap-3 text-rose-700">
+                       <AlertCircle className="h-5 w-5" />
+                       <p className="text-xs font-medium">{error}</p>
+                    </div>
+                  )}
+
+                  <button 
+                    onClick={handleSubmit} 
+                    disabled={submitting} 
+                    className="btn btn-primary h-14 w-full text-base font-medium rounded-2xl shadow-xl shadow-primary-500/20 active:scale-[0.98] transition-all disabled:opacity-50"
                   >
-                    PAID
+                    {submitting ? "Processing Engagement..." : "Submit Field Report"}
                   </button>
-                  <button
-                    type="button"
-                    onClick={() => setVisitType("not_paid")}
-                    className={`rounded-2xl border px-6 py-8 text-center text-lg font-bold transition ${
-                      visitType === "not_paid"
-                        ? "border-amber-500 bg-amber-50 text-amber-700"
-                        : "border-gray-200 bg-white text-gray-700 hover:border-amber-300"
-                    }`}
-                  >
-                    NOT PAID
-                  </button>
-                </div>
-
-                {visitType === "paid" ? (
-                  <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-                    <div>
-                      <label className="label">Amount Collected</label>
-                      <input
-                        className="input h-12 text-base"
-                        type="number"
-                        value={form.amount}
-                        onChange={(event) => setForm((prev) => ({ ...prev, amount: event.target.value }))}
-                        placeholder="Enter amount"
-                      />
-                    </div>
-                    <div>
-                      <label className="label">Payment Mode</label>
-                      <select
-                        className="input h-12 text-base"
-                        value={form.paymentMode}
-                        onChange={(event) => setForm((prev) => ({ ...prev, paymentMode: event.target.value }))}
-                      >
-                        <option value="cash">Cash</option>
-                        <option value="upi">UPI</option>
-                      </select>
-                    </div>
+               </div>
+             ) : (
+               <div className="rounded-3xl border-2 border-dashed border-slate-100 bg-slate-50/30 px-4 py-20 text-center space-y-4">
+                  <div className="mx-auto w-12 h-12 bg-white rounded-full flex items-center justify-center shadow-sm">
+                     <Building2 className="h-5 w-5 text-slate-300" />
                   </div>
-                ) : null}
-
-                {visitType === "not_paid" ? (
-                  <div>
-                    <label className="label">Penalty Amount</label>
-                    <input
-                      className="input h-12 text-base"
-                      type="number"
-                      value={form.penaltyAmount}
-                      onChange={(event) => setForm((prev) => ({ ...prev, penaltyAmount: event.target.value }))}
-                    />
-                    <p className="mt-2 text-xs text-gray-500">This will create a visit record and mark the case as notice required and revisit required.</p>
-                  </div>
-                ) : null}
-
-                {error ? <p className="text-sm text-red-600">{error}</p> : null}
-
-                <button type="button" onClick={handleSubmit} disabled={submitting} className="btn btn-primary h-12 w-full text-base">
-                  {submitting ? "Submitting Visit..." : "Submit Visit"}
-                </button>
-              </div>
-            ) : (
-              <div className="rounded-xl border border-dashed border-gray-200 bg-gray-50 px-4 py-10 text-center text-sm text-gray-500">
-                Select a property above to start a D2DC visit.
-              </div>
-            )}
+                  <p className="text-sm font-medium text-slate-400">Select an asset from the list to begin field entry.</p>
+               </div>
+             )}
           </div>
         </div>
 
-        <div className="space-y-6">
-          <div className="card">
-            <div className="mb-4 flex items-center gap-2">
+        <div className="space-y-8">
+          {/* Real-time Feedback Card */}
+          <div className="bg-white rounded-3xl border border-slate-100 shadow-sm p-8 flex flex-col">
+            <div className="flex items-center gap-3 mb-6">
               <ReceiptText className="h-5 w-5 text-primary-600" />
-              <h2 className="ds-section-title">Receipt / Submit Result</h2>
+              <h2 className="text-lg font-medium text-slate-900 tracking-tight">Active Operation Log</h2>
             </div>
-            {result?.receipt ? (
-              <div className="space-y-3 rounded-xl border border-emerald-200 bg-emerald-50 p-4">
-                <p className="text-sm font-semibold text-emerald-700">Receipt Generated</p>
-                <p className="text-sm text-gray-700">Receipt No: {result.receipt.receiptNumber}</p>
-                <p className="text-sm text-gray-700">Property: {result.receipt.propertyId}</p>
-                <p className="text-sm text-gray-700">Amount: Rs {result.receipt.amount}</p>
-                <p className="text-sm text-gray-700">Mode: {result.receipt.paymentMode.toUpperCase()}</p>
-                <p className="text-sm text-gray-700">Status: {result.receipt.status}</p>
-                <a href={result.whatsappUrl} target="_blank" rel="noreferrer" className="btn btn-primary w-full">
-                  Send WhatsApp Notification
-                </a>
-              </div>
-            ) : result?.notice ? (
-              <div className="space-y-3 rounded-xl border border-amber-200 bg-amber-50 p-4">
-                <div className="flex items-center gap-2 text-amber-700">
-                  <ShieldAlert className="h-5 w-5" />
-                  <p className="text-sm font-semibold">Notice Required</p>
-                </div>
-                <p className="text-sm text-gray-700">Property: {result.visit?.property?.propertyId}</p>
-                <p className="text-sm text-gray-700">Status: NOTICE_PENDING</p>
-                <p className="text-sm text-gray-700">Penalty: Rs {result.notice.penaltyAmount}</p>
-                <a href={result.whatsappUrl} target="_blank" rel="noreferrer" className="btn btn-primary w-full">
-                  Send WhatsApp Notification
-                </a>
-              </div>
-            ) : (
-              <div className="rounded-xl border border-dashed border-gray-200 bg-gray-50 px-4 py-10 text-center text-sm text-gray-500">
-                After submission, receipt or notice status will appear here.
-              </div>
-            )}
+            
+            <div className="flex-1">
+               {result?.receipt ? (
+                 <div className="space-y-4 rounded-3xl border border-emerald-100 bg-emerald-50/40 p-6 animate-in zoom-in-95 duration-500">
+                   <div className="flex items-center gap-2 text-emerald-700 mb-2">
+                     <CheckCircle2 className="h-5 w-5" />
+                     <p className="text-xs font-medium uppercase tracking-widest">Receipt Authenticated</p>
+                   </div>
+                   <div className="space-y-1.5 border-t border-emerald-100/50 pt-4">
+                      <div className="flex justify-between text-xs"><span className="text-slate-500">Receipt No:</span> <span className="font-medium text-slate-900">{result.receipt.receiptNumber}</span></div>
+                      <div className="flex justify-between text-xs"><span className="text-slate-500">Amount:</span> <span className="font-medium text-slate-900">₹{result.receipt.amount}</span></div>
+                      <div className="flex justify-between text-xs"><span className="text-slate-500">Mode:</span> <span className="font-medium text-slate-900 uppercase">{result.receipt.paymentMode}</span></div>
+                   </div>
+                   <a href={result.whatsappUrl} target="_blank" className="btn btn-primary w-full h-12 rounded-xl text-xs mt-2">
+                     Push WhatsApp Receipt
+                   </a>
+                 </div>
+               ) : result?.notice ? (
+                 <div className="space-y-4 rounded-3xl border border-amber-100 bg-amber-50/40 p-6 animate-in zoom-in-95 duration-500">
+                   <div className="flex items-center gap-2 text-amber-700 mb-2">
+                     <ShieldAlert className="h-5 w-5" />
+                     <p className="text-xs font-medium uppercase tracking-widest">Notice Provisioned</p>
+                   </div>
+                   <div className="space-y-1.5 border-t border-amber-100/50 pt-4">
+                      <div className="flex justify-between text-xs"><span className="text-slate-500">Type:</span> <span className="font-medium text-slate-900 uppercase">{result.notice.noticeType}</span></div>
+                      <div className="flex justify-between text-xs"><span className="text-slate-500">Status:</span> <span className="font-medium text-slate-900">PENDING GENERATION</span></div>
+                   </div>
+                   <a href={result.whatsappUrl} target="_blank" className="btn btn-primary w-full h-12 rounded-xl text-xs mt-2">
+                     Notify Citizen
+                   </a>
+                 </div>
+               ) : (
+                 <div className="rounded-2xl border border-dashed border-slate-100 bg-slate-50/20 px-4 py-16 text-center text-xs text-slate-400 font-medium">
+                   Submission results and dynamic receipts will appear here after field entry.
+                 </div>
+               )}
+            </div>
           </div>
 
-          <div className="card">
-            <div className="mb-4 flex items-center gap-2">
-              <CreditCard className="h-5 w-5 text-primary-600" />
-              <h2 className="ds-section-title">Recent Visits</h2>
+          {/* History Snippet */}
+          <div className="bg-white rounded-3xl border border-slate-100 shadow-sm p-8">
+            <div className="flex items-center gap-3 mb-6">
+              <User className="h-5 w-5 text-primary-600" />
+              <h2 className="text-lg font-medium text-slate-900 tracking-tight">Recent Engagement History</h2>
             </div>
+            
             {!dashboard || dashboard.visits.length === 0 ? (
-              <div className="rounded-xl border border-dashed border-gray-200 bg-gray-50 px-4 py-8 text-center text-sm text-gray-500">
-                No visits submitted yet.
+              <div className="rounded-2xl border border-dashed border-slate-100 bg-slate-50 px-4 py-12 text-center text-xs text-slate-400 font-medium">
+                No recent field reports found.
               </div>
             ) : (
-              <div className="space-y-3">
-                {dashboard.visits.map((visit) => (
-                  <div key={visit.id} className="rounded-xl border border-gray-200 p-4">
-                    <p className="text-sm font-semibold text-gray-900">{visit.property?.propertyId}</p>
-                    <p className="mt-1 text-xs text-gray-500">{new Date(visit.timestamp).toLocaleString()}</p>
-                    <div className="mt-3 flex flex-wrap gap-2">
-                      {visit.statusFlow.map((status) => (
-                        <span key={status} className="badge badge-info">{status}</span>
-                      ))}
-                    </div>
-                    <p className="mt-3 text-xs text-gray-500">Location: {visit.geoLocation}</p>
+              <div className="space-y-4">
+                {dashboard.visits.map((v) => (
+                  <div key={v.id} className="p-4 rounded-2xl border border-slate-50 bg-slate-50/30 hover:bg-slate-50 transition-colors">
+                     <div className="flex justify-between items-start">
+                        <p className="text-xs font-medium text-slate-900">{v.property?.propertyId}</p>
+                        <span className={`text-[8px] font-medium uppercase px-2 py-0.5 rounded-full ${v.visitType === "paid" ? "bg-emerald-50 text-emerald-600" : "bg-slate-100 text-slate-500"}`}>
+                           {v.visitType}
+                        </span>
+                     </div>
+                     <p className="text-[9px] text-slate-400 mt-1">{new Date(v.timestamp).toLocaleString()}</p>
+                     <p className="text-[10px] text-slate-500 mt-3 italic line-clamp-1">"{v.remarks || "No remarks provided"}"</p>
                   </div>
                 ))}
               </div>
@@ -350,4 +438,8 @@ export default function CollectorDashboardPage() {
       </div>
     </div>
   );
+}
+
+function Building2(props) {
+  return <svg {...props} xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M6 22V4a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2v18Z"/><path d="M6 12H4a2 2 0 0 0-2 2v6a2 2 0 0 0 2 2h2"/><path d="M18 9h2a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2h-2"/><path d="M10 6h4"/><path d="M10 10h4"/><path d="M10 14h4"/><path d="M10 18h4"/></svg>;
 }

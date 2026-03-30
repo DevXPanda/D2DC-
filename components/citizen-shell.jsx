@@ -108,7 +108,7 @@ export default function CitizenShell({ children }) {
         <header className="sticky top-0 z-10 w-full bg-white shadow-sm">
           <div className="mx-auto flex h-16 max-w-7xl items-center justify-between gap-3 px-4 sm:px-6 lg:px-8">
             <div>
-              <p className="text-2xl font-bold leading-none text-primary-600">D2DC</p>
+              <p className="text-2xl font-medium leading-none text-primary-600">D2DC</p>
               <p className="text-sm text-gray-500">Citizen Portal</p>
             </div>
 
@@ -164,19 +164,36 @@ export default function CitizenShell({ children }) {
             </nav>
           </div>
 
-          <div className="mb-6 flex flex-wrap gap-3">
-            <Link href="/citizen/dashboard" className={`btn ${pathname === "/citizen/dashboard" ? "btn-primary" : "btn-secondary"}`}>
-              Dashboard
-            </Link>
-            <Link href="/citizen/property" className={`btn ${pathname === "/citizen/property" ? "btn-primary" : "btn-secondary"}`}>
-              Property
-            </Link>
-            <Link href="/citizen/visits" className={`btn ${pathname === "/citizen/visits" ? "btn-primary" : "btn-secondary"}`}>
-              Visit History
-            </Link>
-            <Link href="/citizen/notices" className={`btn ${pathname === "/citizen/notices" ? "btn-primary" : "btn-secondary"}`}>
-              Notices
-            </Link>
+          <div className="mb-6 border-b border-slate-200">
+            <div className="flex space-x-8 overflow-x-auto scroller-hidden">
+              {[
+                { name: "Dashboard", href: "/citizen/dashboard" },
+                { name: "Property Portfolio", href: "/citizen/property" },
+                { name: "Visit Logs", href: "/citizen/visits" },
+                { name: "Official Notices", href: "/citizen/notices" }
+              ].map((tab) => {
+                const isActive = pathname === tab.href;
+                return (
+                  <Link
+                    key={tab.name}
+                    href={tab.href}
+                    className={`whitespace-nowrap pb-4 px-1 text-sm font-medium tracking-tight uppercase transition-all relative ${
+                      isActive 
+                        ? "text-primary-600 border-b-2 border-primary-600" 
+                        : "text-slate-400 hover:text-slate-600 border-b-2 border-transparent"
+                    }`}
+                  >
+                    {tab.name}
+                    {isActive && (
+                      <span className="absolute -top-1 -right-1 flex h-2 w-2">
+                        <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-primary-400 opacity-75"></span>
+                        <span className="relative inline-flex rounded-full h-2 w-2 bg-primary-500"></span>
+                      </span>
+                    )}
+                  </Link>
+                );
+              })}
+            </div>
           </div>
 
           {children}

@@ -21,9 +21,11 @@ export default function DashboardPage() {
   const session = useStoredSession();
   const stats = useQuery(api.dashboard.stats, session?.token ? { token: session.token } : "skip");
 
-  const quickActions = [
+  const allActions = [
     { name: "Dashboard", icon: ShieldCheck, link: "/dashboard", color: "bg-slate-600" },
     { name: "Wards", icon: MapPin, link: "/wards", color: "bg-cyan-600" },
+    { name: "Assessments", icon: FileWarning, link: "/assessments", color: "bg-orange-600" },
+    { name: "Demands", icon: ScrollText, link: "/demands", color: "bg-emerald-600" },
     { name: "Properties", icon: Building2, link: "/properties", color: "bg-indigo-600" },
     { name: "Field Worker Management", icon: Users, link: "/users", color: "bg-blue-600" },
     { name: "D2DC Collection", icon: ClipboardList, link: "/collections", color: "bg-emerald-600" },
@@ -33,12 +35,18 @@ export default function DashboardPage() {
     { name: "Audit Logs", icon: ClipboardList, link: "/audit-logs", color: "bg-rose-600" }
   ];
 
+  const quickActions = allActions.filter(action =>
+    ["Assessments", "Demands", "Properties", "D2DC Collection", "Notice Management", "Reports"].includes(action.name)
+  );
+
+  const adminActions = allActions.filter(action => action.name !== "Dashboard");
+
   const insightCards = [
-    { title: "Total Properties", value: stats?.totalProperties ?? 0, icon: Building2 },
-    { title: "Total Visits", value: stats?.totalVisits ?? 0, icon: MapPinned },
-    { title: "Total Collections (D2DC)", value: stats?.totalCollectionsLabel ?? "Rs 0", icon: CheckCircle2 },
-    { title: "Total Pending Visits", value: stats?.totalPendingVisits ?? 0, icon: AlertTriangle },
-    { title: "Total Notices", value: stats?.totalNotices ?? 0, icon: FileWarning }
+    { title: "Total Demand Generated", value: stats?.totalDemandGeneratedLabel ?? "Rs 0", icon: ScrollText },
+    { title: "Total Collected (D2DC)", value: stats?.totalCollectedLabel ?? "Rs 0", icon: CheckCircle2 },
+    { title: "Total Pending Demand", value: stats?.totalPendingLabel ?? "Rs 0", icon: AlertTriangle },
+    { title: "Penalty Collected", value: stats?.totalPenaltyCollectedLabel ?? "Rs 0", icon: FileWarning },
+    { title: "Delayed Cases", value: stats?.totalDelayedCases ?? 0, icon: AlertTriangle }
   ];
 
   return (
@@ -85,7 +93,7 @@ export default function DashboardPage() {
       <section>
         <h2 className="ds-section-title-muted">Administration & Reports</h2>
         <div className="grid grid-cols-2 gap-3 sm:grid-cols-4 lg:grid-cols-7">
-          {quickActions.slice(1).map((action) => (
+          {adminActions.map((action) => (
             <Link key={`mini-${action.name}`} href={action.link} className="stat-card flex flex-col items-center p-3 text-center">
               <div className="mb-2 text-gray-500">
                 <action.icon className="h-5 w-5" />
@@ -127,27 +135,27 @@ export default function DashboardPage() {
         <div className="card overflow-hidden p-0">
           <div className="flex items-center justify-between border-b border-gray-200 bg-emerald-50/50 px-6 py-4">
             <h3 className="flex items-center text-sm font-semibold uppercase text-gray-900">
-              <ClipboardList className="mr-2 h-4 w-4 text-emerald-600" />
-              Reporting Snapshot
+              <ScrollText className="mr-2 h-4 w-4 text-emerald-600" />
+              Billing & Demands Snapshot
             </h3>
-            <Link href="/reports" className="text-xs font-medium text-emerald-600">Open reports</Link>
+            <Link href="/demands" className="text-xs font-medium text-emerald-600 hover:underline">View all</Link>
           </div>
-          <div className="grid grid-cols-2 gap-4 p-6">
-            <div className="rounded-lg border border-gray-200 p-4">
-              <p className="text-xs uppercase text-gray-500">% Paid</p>
-              <p className="mt-2 text-2xl font-bold text-emerald-600">{stats?.paidPercent ?? 0}%</p>
+          <div className="p-6 space-y-3">
+            <div className="flex items-center justify-between border-b border-dashed border-gray-100 pb-2">
+              <span className="text-xs font-medium uppercase text-gray-500">Total Demand Generated</span>
+              <span className="text-base font-bold text-gray-900">{stats?.totalDemandGeneratedLabel ?? "Rs 0"}</span>
             </div>
-            <div className="rounded-lg border border-gray-200 p-4">
-              <p className="text-xs uppercase text-gray-500">% Not Paid</p>
-              <p className="mt-2 text-2xl font-bold text-amber-600">{stats?.notPaidPercent ?? 0}%</p>
+            <div className="flex items-center justify-between border-b border-dashed border-gray-100 pb-2">
+              <span className="text-xs font-medium uppercase text-gray-500">Collected Amount</span>
+              <span className="text-base font-bold text-emerald-600">{stats?.totalCollectedLabel ?? "Rs 0"}</span>
             </div>
-            <div className="rounded-lg border border-gray-200 p-4">
-              <p className="text-xs uppercase text-gray-500">Notice Served</p>
-              <p className="mt-2 text-2xl font-bold text-gray-900">{stats?.noticeServedCount ?? 0}</p>
+            <div className="flex items-center justify-between border-b border-dashed border-gray-100 pb-2">
+              <span className="text-xs font-medium uppercase text-gray-500">Penalty Collected</span>
+              <span className="text-base font-bold text-amber-600">{stats?.totalPenaltyCollectedLabel ?? "Rs 0"}</span>
             </div>
-            <div className="rounded-lg border border-gray-200 p-4">
-              <p className="text-xs uppercase text-gray-500">Penalty Collected</p>
-              <p className="mt-2 text-2xl font-bold text-gray-900">{stats?.penaltyCollectedLabel ?? "Rs 0"}</p>
+            <div className="flex items-center justify-between pt-1">
+              <span className="text-xs font-medium uppercase text-gray-500">Outstanding Balance</span>
+              <span className="text-base font-bold text-rose-600">{stats?.totalPendingLabel ?? "Rs 0"}</span>
             </div>
           </div>
         </div>

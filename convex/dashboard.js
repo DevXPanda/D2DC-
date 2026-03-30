@@ -38,19 +38,32 @@ export const stats = query({
         };
       });
 
+    const totalCollected = completedCollections.reduce((sum, item) => sum + item.amount, 0);
+    const demandDocs = await ctx.db.query("demands").collect();
+    const totalPendingAmount = demandDocs.reduce((acc, d) => acc + d.totalAmount, 0);
+    const totalDemandGenerated = totalPendingAmount + totalCollected;
+    const totalPenaltyCollected = completedCollections.reduce((sum, item) => sum + (item.penaltyAmount || 0), 0);
+    const totalDelayedCases = demandDocs.filter(d => d.penaltyAmount > 0).length;
+
     return {
+      totalDemandGenerated,
+      totalDemandGeneratedLabel: formatCurrency(totalDemandGenerated),
       totalProperties: properties.length,
       totalWards: wards.length,
       totalUsers: users.filter((item) => item.role !== "admin").length,
       totalVisits: visits.length,
-      totalCollectionsAmount: completedCollections.reduce((sum, item) => sum + item.amount, 0),
-      totalCollectionsLabel: formatCurrency(completedCollections.reduce((sum, item) => sum + item.amount, 0)),
+      totalCollected,
+      totalCollectedLabel: formatCurrency(totalCollected),
+      totalPendingAmount,
+      totalPendingLabel: formatCurrency(totalPendingAmount),
       totalPendingVisits: notPaidVisits.length,
       totalNotices: notices.length,
+      totalDelayedCases,
+      totalPenaltyCollected,
+      totalPenaltyCollectedLabel: formatCurrency(totalPenaltyCollected),
       paidPercent: visits.length ? Math.round((paidVisits.length / visits.length) * 100) : 0,
       notPaidPercent: visits.length ? Math.round((notPaidVisits.length / visits.length) * 100) : 0,
       noticeServedCount: notices.length,
-      penaltyCollectedLabel: formatCurrency(0),
       recentVisits
     };
   }

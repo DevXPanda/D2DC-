@@ -372,16 +372,30 @@ export const collectorDashboard = query({
     ]);
 
     const search = String(args.search || "").trim().toLowerCase();
-    const filteredProperties = properties
+    const now = Date.now();
+    const propertyPromises = properties
       .filter((property) => property.status === "active")
       .filter((property) => {
         if (!search) return true;
         return `${property.propertyId} ${property.ownerName} ${property.address}`.toLowerCase().includes(search);
       })
-      .map((property) => ({
-        ...property,
-        id: property._id
-      }));
+      .map(async (property) => {
+        const demand = await ctx.db
+          .query("demands")
+          .withIndex("by_property", (q) => q.eq("propertyId", property._id))
+          .unique();
+
+        return {
+          ...property,
+          id: property._id,
+          pendingMonths: demand?.pendingMonths ?? 0,
+          baseAmount: demand?.baseAmount ?? 0,
+          penaltyAmount: demand?.penaltyAmount ?? 0,
+          totalDue: demand?.totalAmount ?? 0
+        };
+      });
+    
+    const resolvedProperties = await Promise.all(propertyPromises);
 
     const relatedNotices = notices.filter((notice) => properties.some((property) => property._id === notice.propertyId));
     const recentVisits = withRelations({
@@ -399,7 +413,7 @@ export const collectorDashboard = query({
         notPaidVisits: visits.filter((visit) => visit.visitType === "not_paid").length,
         pendingApprovals: collections.filter((collection) => collection.status === "pending").length
       },
-      properties: filteredProperties,
+      properties: resolvedProperties,
       visits: recentVisits.slice(0, 5)
     };
   }
@@ -430,10 +444,18 @@ export const submitCollectorVisit = mutation({
   args: {
     token: v.string(),
     propertyId: v.id("properties"),
-    visitType: v.union(v.literal("paid"), v.literal("not_paid")),
+    visitType: v.union(v.literal("paid"), v.literal("not_paid"), v.literal("reminder"), v.literal("payment_collection"), v.literal("warning"), v.literal("final_warning")),
+    citizenResponse: v.optional(v.union(v.literal("will_pay_today"), v.literal("will_pay_later"), v.literal("refused_to_pay"), v.literal("not_available"))),
     geoLocation: v.string(),
     amount: v.optional(v.number()),
-    paymentMode: v.optional(v.union(v.literal("cash"), v.literal("upi"))),
+    paymentMode: v.optional(v.string()),
+    transactionId: v.optional(v.string()),
+    chequeNumber: v.optional(v.string()),
+    chequeDate: v.optional(v.number()),
+    bankName: v.optional(v.string()),
+    remarks: v.optional(v.string()),
+    expectedPaymentDate: v.optional(v.number()),
+    proofPhotoUrl: v.optional(v.string()),
     penaltyAmount: v.optional(v.number())
   },
   handler: async (ctx, args) => {
@@ -447,89 +469,142 @@ export const submitCollectorVisit = mutation({
       throw new Error("This property is not assigned to your ward.");
     }
 
-    if (args.visitType === "paid" && Number(args.amount || 0) <= 0) {
-      throw new Error("Enter the collected amount.");
-    }
-
     const timestamp = Date.now();
-    await ctx.db.insert("visits", {
+    const visitId = await ctx.db.insert("visits", {
       propertyId: args.propertyId,
       collectorId: user._id,
       visitType: args.visitType,
+      citizenResponse: args.citizenResponse,
+      expectedPaymentDate: args.expectedPaymentDate,
+      remarks: args.remarks,
+      proofPhotoUrl: args.proofPhotoUrl,
       geoLocation: args.geoLocation,
       timestamp
     });
 
-    if (args.visitType === "paid") {
-      const amount = Number(args.amount || 0);
+    let collectionResult = null;
+    let noticeResult = null;
 
-      await ctx.db.insert("collections", {
+    // Handle Payment Collection (will_pay_today)
+    if (args.citizenResponse === "will_pay_today" || args.visitType === "paid") {
+      const amount = Number(args.amount || 0);
+      if (amount <= 0) throw new Error("Enter the collected amount.");
+
+      const demand = await ctx.db
+        .query("demands")
+        .withIndex("by_property", (q) => q.eq("propertyId", args.propertyId))
+        .unique();
+
+      const currentPenalty = demand?.penaltyAmount || 0;
+      const penaltyCollected = Math.min(amount, currentPenalty);
+      const baseCollected = amount - penaltyCollected;
+      const monthsCovered = Math.floor(baseCollected / 100);
+
+      const collectionId = await ctx.db.insert("collections", {
         propertyId: args.propertyId,
         collectorId: user._id,
+        visitId,
         amount,
+        baseAmount: baseCollected,
+        penaltyAmount: penaltyCollected,
         paymentMode: args.paymentMode || "cash",
+        transactionId: args.transactionId,
+        chequeNumber: args.chequeNumber,
+        chequeDate: args.chequeDate,
+        bankName: args.bankName,
         status: "pending",
+        monthsCovered,
         geoLocation: args.geoLocation,
         timestamp
       });
+
+      if (monthsCovered > 0) {
+        const lastPaid = property.lastPaidDate || property.createdAt;
+        const date = new Date(lastPaid);
+        date.setMonth(date.getMonth() + monthsCovered);
+        await ctx.db.patch(args.propertyId, { lastPaidDate: date.getTime() });
+      }
+
+      if (demand) {
+        await ctx.db.patch(demand._id, {
+          baseAmount: Math.max(0, demand.baseAmount - baseCollected),
+          penaltyAmount: Math.max(0, demand.penaltyAmount - penaltyCollected),
+          totalAmount: Math.max(0, demand.totalAmount - amount),
+          pendingMonths: Math.max(0, demand.pendingMonths - monthsCovered),
+          lastUpdated: timestamp
+        });
+      }
 
       await createAuditLog(ctx, {
         action: "Collection submitted",
         performedBy: user.name,
         entityType: "collection",
-        details: `${property.propertyId} submitted for admin approval`
+        details: `${property.propertyId} collection of Rs ${amount} via ${args.paymentMode}`
       });
 
-      const whatsappMessage = `Rs ${amount} collected for Property ${property.propertyId} by Collector ${user.name}`;
-      return {
-        visit: {
-          property,
-          visitType: "paid",
-          geoLocation: args.geoLocation,
-          timestamp
-        },
-        receipt: {
-          receiptNumber: `RCT-${timestamp}`,
-          propertyId: property.propertyId,
-          amount,
-          paymentMode: args.paymentMode || "cash",
-          status: "PENDING_ADMIN_APPROVAL"
-        },
-        whatsappUrl: `https://wa.me/91${property.mobile}?text=${encodeURIComponent(whatsappMessage)}`
+      collectionResult = {
+        receiptNumber: `RCT-${timestamp}`,
+        propertyId: property.propertyId,
+        amount,
+        paymentMode: args.paymentMode || "cash",
+        status: "PENDING_ADMIN_APPROVAL"
       };
     }
 
-    const penaltyAmount = Number(args.penaltyAmount || 0);
-    const noticeId = await ctx.db.insert("notices", {
-      propertyId: args.propertyId,
-      penaltyAmount,
-      noticeDate: timestamp,
-      status: "pending",
-      revisitStatus: "pending",
-      createdAt: timestamp
-    });
+    // Handle Notice Logic (escalation)
+    if (args.citizenResponse === "refused_to_pay" || ["warning", "final_warning", "not_paid"].includes(args.visitType)) {
+      const demand = await ctx.db
+        .query("demands")
+        .withIndex("by_property", (q) => q.eq("propertyId", args.propertyId))
+        .unique();
 
-    await createAuditLog(ctx, {
-      action: "Notice required",
-      performedBy: user.name,
-      entityType: "notice",
-      details: `${property.propertyId} marked notice pending`
-    });
+      // Determine notice type based on visit type or previous history
+      let noticeType = "reminder";
+      if (args.visitType === "final_warning") noticeType = "final_warrant";
+      else if (args.visitType === "warning") noticeType = "penalty";
+      else if (args.visitType === "not_paid") noticeType = "demand";
 
-    const whatsappMessage = `Property ${property.propertyId} not paid. Notice will be generated.`;
-    return {
-      visit: {
-        property,
-        visitType: "not_paid",
-        geoLocation: args.geoLocation,
-        timestamp
-      },
-      notice: {
-        id: noticeId,
+      const penaltyAmount = Number(args.penaltyAmount || 0);
+      const noticeNumber = `NTC-${timestamp}-${property.propertyId.split('-').pop()}`;
+      
+      const nId = await ctx.db.insert("notices", {
+        propertyId: args.propertyId,
+        demandId: demand?._id,
+        noticeNumber,
+        noticeType,
+        amountDue: demand?.totalAmount || 0,
         penaltyAmount,
-        status: "NOTICE_PENDING"
-      },
-      whatsappUrl: `https://wa.me/91${property.mobile}?text=${encodeURIComponent(whatsappMessage)}`
+        noticeDate: timestamp,
+        status: "generated",
+        revisitStatus: "pending",
+        generatedBy: user._id,
+        createdAt: timestamp
+      });
+
+      noticeResult = {
+        id: nId,
+        penaltyAmount,
+        status: "NOTICE_PENDING",
+        noticeType
+      };
+
+      await createAuditLog(ctx, {
+        action: "Escalation notice generated",
+        performedBy: user.name,
+        entityType: "notice",
+        details: `${property.propertyId} served ${noticeType} notice due to ${args.citizenResponse || args.visitType}`
+      });
+    }
+
+    const message = collectionResult 
+      ? `Rs ${collectionResult.amount} collected for Property ${property.propertyId} by Collector ${user.name}`
+      : `Visit recorded for Property ${property.propertyId}. Status: ${args.citizenResponse || args.visitType}`;
+
+    return {
+      visit: { property, visitType: args.visitType, citizenResponse: args.citizenResponse, timestamp },
+      receipt: collectionResult,
+      notice: noticeResult,
+      whatsappUrl: `https://wa.me/91${property.mobile}?text=${encodeURIComponent(message)}`
     };
   }
 });
@@ -816,18 +891,64 @@ export const citizenDashboard = query({
         property: propertyMap.get(item.propertyId) || null
       }));
 
+    // Get D2DC Dues from assessments/demands tables
+    let totalPendingMonths = 0;
+    let totalDue = 0;
+    let monthlyCharge = 100;
+
+    const propertyDues = await Promise.all(
+      citizenProperties.map(async (property) => {
+        const [assessment, demand] = await Promise.all([
+          ctx.db.query("assessments").withIndex("by_property", (q) => q.eq("propertyId", property._id)).unique(),
+          ctx.db.query("demands").withIndex("by_property", (q) => q.eq("propertyId", property._id)).unique()
+        ]);
+        
+        if (assessment) monthlyCharge = assessment.monthlyCharge;
+        
+        return {
+          propertyId: property._id,
+          pendingMonths: demand?.pendingMonths ?? 0,
+          baseAmount: demand?.baseAmount ?? 0,
+          penaltyAmount: demand?.penaltyAmount ?? 0,
+          totalAmount: demand?.totalAmount ?? 0,
+          monthlyCharge: assessment?.monthlyCharge ?? 100
+        };
+      })
+    );
+
+    totalPendingMonths = propertyDues.reduce((acc, d) => acc + d.pendingMonths, 0);
+    totalDue = propertyDues.reduce((acc, d) => acc + d.totalAmount, 0);
+    const totalPenalty = propertyDues.reduce((acc, d) => acc + d.penaltyAmount, 0);
+    const totalBase = propertyDues.reduce((acc, d) => acc + d.baseAmount, 0);
+
     return {
       stats: {
         totalVisits: citizenVisits.length,
         paidVisits: citizenVisits.filter((item) => item.visitType === "paid").length,
         notPaidVisits: citizenVisits.filter((item) => item.visitType === "not_paid").length,
-        pendingNotices: citizenNotices.filter((item) => item.status === "pending").length
+        pendingNotices: citizenNotices.filter((item) => item.status === "pending").length,
+        monthlyCharge: monthlyCharge,
+        pendingMonths: totalPendingMonths,
+        baseAmount: totalBase,
+        penaltyAmount: totalPenalty,
+        totalDue: totalDue,
+        paymentStatus: totalDue > 0 ? "Pending" : "Up-to-date"
       },
-      properties: citizenProperties.map((property) => ({
-        ...property,
-        id: property._id,
-        wardDetails: wardMap.get(property.ward) || null
-      })),
+      properties: citizenProperties.map((property) => {
+        const dues = propertyDues.find(d => d.propertyId === property._id);
+        return {
+          ...property,
+          id: property._id,
+          wardDetails: wardMap.get(property.ward) || null,
+          dues: dues || {
+            pendingMonths: 0,
+            baseAmount: 0,
+            penaltyAmount: 0,
+            totalAmount: 0,
+            monthlyCharge: 100
+          }
+        };
+      }),
       recentVisits: citizenVisits.slice(0, 5),
       recentCollections: citizenCollections.slice(0, 5),
       pendingNotices: citizenNotices.filter((item) => item.status === "pending").slice(0, 5),
@@ -951,5 +1072,102 @@ export const citizenPayCollection = mutation({
     });
 
     return collectionId;
+  }
+});
+export const generateManualNotice = mutation({
+  args: {
+    token: v.string(),
+    propertyId: v.id("properties"),
+    noticeType: v.union(v.literal("reminder"), v.literal("demand"), v.literal("penalty"), v.literal("final_warrant")),
+    penaltyAmount: v.number(),
+    remarks: v.optional(v.string())
+  },
+  handler: async (ctx, args) => {
+    const { user } = await requireRole(ctx, args.token, ["admin", "supervisor"]);
+    const property = await ctx.db.get(args.propertyId);
+    if (!property) throw new Error("Property not found.");
+
+    const demand = await ctx.db
+      .query("demands")
+      .withIndex("by_property", (q) => q.eq("propertyId", args.propertyId))
+      .unique();
+
+    const timestamp = Date.now();
+    const noticeNumber = `NTC-MAN-${timestamp}-${property.propertyId.split('-').pop()}`;
+    
+    const noticeId = await ctx.db.insert("notices", {
+      propertyId: args.propertyId,
+      demandId: demand?._id,
+      noticeNumber,
+      noticeType: args.noticeType,
+      amountDue: demand?.totalAmount || 0,
+      penaltyAmount: args.penaltyAmount,
+      noticeDate: timestamp,
+      status: "generated",
+      revisitStatus: "pending",
+      remarks: args.remarks,
+      generatedBy: user._id,
+      createdAt: timestamp
+    });
+
+    // Update demand table with new penalty if applicable
+    if (demand && args.penaltyAmount > 0) {
+       await ctx.db.patch(demand._id, {
+          penaltyAmount: (demand.penaltyAmount || 0) + args.penaltyAmount,
+          totalAmount: (demand.totalAmount || 0) + args.penaltyAmount,
+          lastUpdated: timestamp
+       });
+    }
+
+    await createAuditLog(ctx, {
+      action: "Manual notice generated",
+      performedBy: user.name,
+      entityType: "notice",
+      details: `${property.propertyId} manual ${args.noticeType} notice of Rs ${args.penaltyAmount} penalty`
+    });
+
+    const message = `Official ${args.noticeType.toUpperCase()} Notice issued for Property ${property.propertyId}. Please clear dues immediately.`;
+    return {
+      id: noticeId,
+      whatsappUrl: `https://wa.me/91${property.mobile}?text=${encodeURIComponent(message)}`
+    };
+  }
+});
+
+export const collectorCollections = query({
+  args: {
+    token: v.string(),
+    search: v.optional(v.string())
+  },
+  handler: async (ctx, args) => {
+    const { user } = await requireRole(ctx, args.token, ["collector", "supervisor"]);
+    const [collections, properties] = await Promise.all([
+      ctx.db.query("collections").withIndex("by_collector", (q) => q.eq("collectorId", user._id)).collect(),
+      ctx.db.query("properties").collect()
+    ]);
+    const propertyMap = new Map(properties.map((item) => [item._id, item]));
+    const search = String(args.search || "").trim().toLowerCase();
+
+    return collections
+      .slice()
+      .sort((a, b) => b.timestamp - a.timestamp)
+      .map((collection) => ({
+        ...collection,
+        id: collection._id,
+        property: propertyMap.get(collection.propertyId) || null
+      }))
+      .filter((collection) => {
+        if (!search) return true;
+        return [
+          collection.property?.propertyId,
+          collection.property?.ownerName,
+          collection.paymentMode,
+          collection.status,
+          collection.transactionId,
+          collection.chequeNumber
+        ]
+          .filter(Boolean)
+          .some((value) => String(value).toLowerCase().includes(search));
+      });
   }
 });
